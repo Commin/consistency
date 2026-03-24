@@ -38,7 +38,7 @@ The repository consists of several core components that implement our proposed m
 ### 1. SSIM Calculation
 
 ```bash
-python calibrate_video.py --gt-dir path/to/ground_truth --output-dir path/to/output --csv-name ssim_results.csv
+python ssim.py --gt-dir path/to/ground_truth --output-dir path/to/output --csv-name ssim_results.csv
 ```
 
 ### 2. Calibrate Consistency Envelope
