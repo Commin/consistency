@@ -1,7 +1,9 @@
 # Consistency-aware Performance Monitoring and Model Retraining for Object Detection
 
-This repository contains the implementation of **Prediction Consistency**, a label-free metric that measures the temporal stability of detection results across consecutive frames in time-series images (e.g., videos from onboard cameras). 
+This [repository](https://github.com/Commin/consistency) contains the implementation of **Prediction Consistency**, a label-free metric that measures the temporal stability of detection results across consecutive frames in time-series images (e.g., videos from onboard cameras). 
 While we use YOLOv12 as the base object detection model, the core contribution of this repository focuses on runtime reliability assessment and dynamic data construction.
+
+**Please clone YOLOv12 before you use this repository.**
 
 ## Overview
 
@@ -25,7 +27,6 @@ The repository consists of several core components that implement our proposed m
 ### Incremental Learning & Dataset Construction
 - **`construct.py`**: Handles dynamic dataset construction for model retraining or incremental learning. It leverages the consistency scores (and other modes like confidence or random sampling) to intelligently select frames (e.g., picking 10% of frames with the lowest consistency for annotation and retraining).
 - **`increment.py`**: The main incremental pipeline that orchestrates the end-to-end multi-stage process (e.g., sequentially from `clear_00` to `clear_50`). It seamlessly integrates YOLO training, evaluation, validation, and dynamic dataset construction based on the selected target metric.
-- **`simulate_construct.py`**: A faster, lightweight simulation script that verifies the dataset generation and stage transition logic without needing to execute full YOLO training iterations.
 
 ### Model Training & Evaluation Handlers (YOLOv12 Base)
 - **`train.py`**: YOLOv12 training wrapper script with per-epoch validations.
@@ -34,21 +35,56 @@ The repository consists of several core components that implement our proposed m
 
 ## Usage
 
-### 1. Calibrate Consistency Envelope and Detect Drift
+### 1. SSIM Calculation
+
+```bash
+python calibrate_video.py --gt-dir path/to/ground_truth --output-dir path/to/output --csv-name ssim_results.csv
+```
+
+### 2. Calibrate Consistency Envelope
 Calibrate the threshold boundary based on a historical sequence and evaluate for abnormal drifts:
 ```bash
-python calibrate.py --lbl-dir path/to/labels --img-dir path/to/images --quantile 0.95 --plot
+python calibrate_video.py --lbl-dir path/to/labels --img-dir path/to/images --quantile 0.95 --plot
 ```
-This script generates an optimal boundary envelope `calibration_plot.png` and runs abnormal drift detection over the sequence, outputting instances of detected instability (adaptive boundary drift, fixed boundary, confidence jitter, center-shift).
+This script generates an optimal boundary envelope `calibration_plot.png` and runs drift detection over the sequence, outputting instances of detected instability.
 
-### 2. Incremental Learning Pipeline
+
+### 3. Incremental Learning Pipeline
 To run the full incremental training and dataset construction based heavily on Prediction Consistency, configure the inside of the script (e.g., `LEARNING_MODE = "consistency"`) and run:
 ```bash
-python increment.py
+python increment.py --mode consistency --train --increment --stage 0
 ```
 
-### 3. Simulation of Dataset Construction
-To verify the dataset construction and split logic without executing heavy model training, use:
+### 4. Evaluation Experiment
+
+To use the `exp` folder python files for the evaluation experiment:
+
+**1. Generate aggregate agreement score, match coverage ratio:**
+Outputs: `all_val_data_all/labels/`, `all_consistency_eval/frame_consistency_.csv`, `all_consistency_eval/object_consistency_.json`
 ```bash
-python simulate_construct.py
+python val_consistency.py --data dataset_path/data.yaml --weights weights_path/best.pt --project project_path
+```
+
+**2. Generate ground-truth multi-object tracking (`gt_track`):**
+```bash
+python generate_gt_consistency_reference_tracker.py --gt-dir dataset_path/labels/ --save-path grouped_gt_tracker
+```
+
+**3. Generate oracle consistency boundary, index summary, and calibration metrics:**
+```bash
+python generate_gt_envelope_from_tracker.py --grouped-gt-root grouped_gt_tracker \
+--ssim-path ssim_results.csv \
+--save-path gt_envelope_out_with_unmatched \
+```
+
+**4. Generate and evaluate calibrated consistency boundary based on oracle boundary:**
+Outputs: `best_consistency_boundary.png`, `index_summary.json`, `per_prefix_calibration_metrics.csv`
+```bash
+python eval_calibrate_robust.py --frame-path object_consistency_all_data.json --ssim-path all_ssim.csv --save-path save_path --plot
+```
+
+**5. Generate global metrics, per prefix metrics, and method configs:**
+Outputs: `global_metrics.csv`, `per_prefix_metrics.csv`, `method_configs.json`
+```bash
+python eval_consistency_accuracy_filtered.py --frame-path object_consistency_all_data.json --ssim-path all_ssim.csv --grouped-gt-root grouped_gt_tracker/ --calibration-root grouped_robust_calibrate_results/ --save-path save_path
 ```
