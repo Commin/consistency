@@ -168,9 +168,24 @@ def get_all_detection_results(path, stage_name, alpha=1.0, beta=0.1, img_list=No
         C_t = 1.0
         mean_match_coverage_ratio = 1.0
         match_pairs = []
+        ssim_score = 1.0
 
         # Only compute for consecutive frames in the same sequence
         if seq_t == seq_t1:
+            stem_t = Path(txt_t).stem
+            stem_t1 = Path(txt_t1).stem
+            
+            img_t_path = get_image_path(stem_t, Path(txt_t).parent)
+            img_t1_path = get_image_path(stem_t1, Path(txt_t1).parent)
+            
+            if img_t_path and img_t1_path:
+                img1 = cv2.imread(img_t_path)
+                img2 = cv2.imread(img_t1_path)
+                if img1 is not None and img2 is not None:
+                    if img1.shape != img2.shape:
+                        img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
+                    ssim_score = float(ssim(img1, img2, channel_axis=-1))
+
             # If you do not require strict adjacency, replace this with only seq_t == seq_t1
             if frame_t1 > frame_t:
                 C_t, mean_match_coverage_ratio, match_pairs = calculate_frame_level_consistency(
@@ -184,6 +199,8 @@ def get_all_detection_results(path, stage_name, alpha=1.0, beta=0.1, img_list=No
                     distance_ratio=1.5,
                     min_distance_px=0.1,  # normalized YOLO xywh coordinates
                 )
+                
+        boundary_res = compare_boundary(C_t, ssim_score, alpha, beta)
 
         frame_rows.append({
             "path": Path(txt_t).stem,
@@ -193,6 +210,8 @@ def get_all_detection_results(path, stage_name, alpha=1.0, beta=0.1, img_list=No
             "next_frame": frame_t1,
             "frame_consistency": float(C_t),
             "mean_match_coverage_ratio": float(mean_match_coverage_ratio),
+            "ssim_score": float(ssim_score),
+            "boundary_result": int(boundary_res),
             "num_matches": int(len(match_pairs)),
             "original_index": i,
         })
@@ -202,6 +221,8 @@ def get_all_detection_results(path, stage_name, alpha=1.0, beta=0.1, img_list=No
             "transition_to": Path(txt_t1).stem,
             "frame_consistency": float(C_t),
             "mean_match_coverage_ratio": float(mean_match_coverage_ratio),
+            "ssim_score": float(ssim_score),
+            "boundary_result": int(boundary_res),
             "num_matches": int(len(match_pairs)),
             "matches": match_pairs,
         }
@@ -218,6 +239,8 @@ def get_all_detection_results(path, stage_name, alpha=1.0, beta=0.1, img_list=No
         "next_frame": None,
         "frame_consistency": 1.0,
         "mean_match_coverage_ratio": 1.0,
+        "ssim_score": 1.0,
+        "boundary_result": 1,
         "num_matches": 0,
         "original_index": len(sorted_txts) - 1,
     })
@@ -227,6 +250,8 @@ def get_all_detection_results(path, stage_name, alpha=1.0, beta=0.1, img_list=No
         "transition_to": None,
         "frame_consistency": 1.0,
         "mean_match_coverage_ratio": 1.0,
+        "ssim_score": 1.0,
+        "boundary_result": 1,
         "num_matches": 0,
         "matches": [],
     }
