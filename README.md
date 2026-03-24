@@ -88,3 +88,10 @@ Outputs: `global_metrics.csv`, `per_prefix_metrics.csv`, `method_configs.json`
 ```bash
 python eval_consistency_accuracy_filtered.py --frame-path object_consistency_all_data.json --ssim-path all_ssim.csv --grouped-gt-root grouped_gt_tracker/ --calibration-root grouped_robust_calibrate_results/ --save-path save_path
 ```
+
+## Dataset
+
+The experiments in our paper are conducted on the Singapore Maritime Dataset (SMD), a large-scale maritime image dataset collected from onboard cameras. The dataset contains diverse maritime scenarios, including various weather conditions, lighting variations, and object types (e.g., vessels, buoys). The SMD provides a rich testbed for evaluating the robustness and reliability of object detection models in real-world maritime environments.
+
+[SMD official](https://sites.google.com/site/dilipprasad/home/singapore-maritime-dataset)
+[SMD image dataset](https://universe.roboflow.com/maritime-cumkb/singapore-maritime)
