@@ -5,9 +5,9 @@ from ultralytics import YOLO
 
 # Import local utility functions from the existing pipeline
 from construct import get_image_paths_from_yaml
-from consistency import parse_yolo_txt, calculate_frame_level_consistency
+from consistency import parse_yolo_txt, calculate_frame_level_consistency, compare_boundary
 
-def run_all_val_consistency(model_path, data_yaml, project_root):
+def run_all_val_consistency(model_path, data_yaml, project_root, alpha, beta):
     """
     Run YOLO validation on all data specified in data_yaml, 
     and then compute & save frame-level and object-level consistency.
@@ -60,12 +60,11 @@ def run_all_val_consistency(model_path, data_yaml, project_root):
     print("\n--- 3. Measuring Consistency ---")
 
     labels_path = os.path.join(save_dir, "labels")
-    csv_path, json_path = get_all_detection_results(str(labels_path), stage_name)
-    
+    csv_path, json_path = get_all_detection_results(str(labels_path), stage_name, alpha, beta, img_list=img_list)
     print("\n✅ All processes finished!")
     return csv_path, json_path
 
-def get_all_detection_results(path, stage_name):
+def get_all_detection_results(path, stage_name, alpha=1.0, beta=0.1, img_list=None):
     """
     Get all detection txt files from path, compute object-level and frame-level
     consistency in natural frame order, and save the results.
@@ -74,6 +73,7 @@ def get_all_detection_results(path, stage_name):
         - parse_yolo_txt(txt_path)
         - calculate_object_level_matches(preds_t, preds_t_plus_1, ...)
         - calculate_frame_level_consistency(preds_t, preds_t_plus_1, ...)
+        - compare_boundary(r_score, ssim_score, alpha, beta)
 
     Output convention:
         - Frame-level CSV:
@@ -131,6 +131,26 @@ def get_all_detection_results(path, stage_name):
     frame_csv_path = path.parent.parent / f"frame_consistency_{stage_name}.csv"
     object_json_path = path.parent.parent / f"object_consistency_{stage_name}.json"
 
+    import cv2
+    from skimage.metrics import structural_similarity as ssim
+
+    # Build image lookup dictionary
+    img_dict = {Path(p).stem: p for p in img_list} if img_list else {}
+
+    def get_image_path(stem_name, possible_labels_dir):
+        if stem_name in img_dict: 
+            return img_dict[stem_name]
+        
+        # Fallback: deduce from labels directory (e.g., ../../images/stem.jpg)
+        possible_img_dir = possible_labels_dir.parent.parent / "images"
+        if possible_img_dir.exists():
+            for ext in [".jpg", ".jpeg", ".png", ".bmp"]:
+                img_path = possible_img_dir / (stem_name + ext)
+                if img_path.exists():
+                    img_dict[stem_name] = str(img_path)
+                    return str(img_path)
+        return None
+
     frame_rows = []
     object_results = {}
 
@@ -146,14 +166,14 @@ def get_all_detection_results(path, stage_name):
 
         # Default for non-consecutive or sequence switch transitions
         C_t = 1.0
-        mean_match_quality = 1.0
+        mean_match_coverage_ratio = 1.0
         match_pairs = []
 
         # Only compute for consecutive frames in the same sequence
         if seq_t == seq_t1:
             # If you do not require strict adjacency, replace this with only seq_t == seq_t1
             if frame_t1 > frame_t:
-                C_t, mean_match_quality, match_pairs = calculate_frame_level_consistency(
+                C_t, mean_match_coverage_ratio, match_pairs = calculate_frame_level_consistency(
                     preds_t,
                     preds_t1,
                     apply_nms=True,
@@ -172,7 +192,7 @@ def get_all_detection_results(path, stage_name):
             "frame": frame_t,
             "next_frame": frame_t1,
             "frame_consistency": float(C_t),
-            "mean_match_quality": float(mean_match_quality),
+            "mean_match_coverage_ratio": float(mean_match_coverage_ratio),
             "num_matches": int(len(match_pairs)),
             "original_index": i,
         })
@@ -181,7 +201,7 @@ def get_all_detection_results(path, stage_name):
             "transition_from": Path(txt_t).stem,
             "transition_to": Path(txt_t1).stem,
             "frame_consistency": float(C_t),
-            "mean_match_quality": float(mean_match_quality),
+            "mean_match_coverage_ratio": float(mean_match_coverage_ratio),
             "num_matches": int(len(match_pairs)),
             "matches": match_pairs,
         }
@@ -197,7 +217,7 @@ def get_all_detection_results(path, stage_name):
         "frame": frame_last,
         "next_frame": None,
         "frame_consistency": 1.0,
-        "mean_match_quality": 1.0,
+        "mean_match_coverage_ratio": 1.0,
         "num_matches": 0,
         "original_index": len(sorted_txts) - 1,
     })
@@ -206,7 +226,7 @@ def get_all_detection_results(path, stage_name):
         "transition_from": Path(last_txt).stem,
         "transition_to": None,
         "frame_consistency": 1.0,
-        "mean_match_quality": 1.0,
+        "mean_match_coverage_ratio": 1.0,
         "num_matches": 0,
         "matches": [],
     }
@@ -234,17 +254,21 @@ if __name__ == "__main__":
  
     args = parser.parse_args()
     
+    alpha, beta = args.alpha_beta.split(":")
+    alpha = float(alpha)
+    beta = float(beta)
+    
     # User can specify weights (.pt) and data (.yaml) or only txt-path including labels
     if args.weights and args.data:
         if not os.path.exists(args.weights):
             raise FileNotFoundError(f"Model weights not found: {args.weights}")
         if not os.path.exists(args.data):
             raise FileNotFoundError(f"Data yaml not found: {args.data}")
-        run_all_val_consistency(args.weights, args.data, args.project)
+        run_all_val_consistency(args.weights, args.data, args.project, alpha, beta)
     elif args.txt_path:
         if not os.path.exists(args.txt_path):
             raise FileNotFoundError(f"Txt path not found: {args.txt_path}")
         stage_name = args.txt_path.split("test_val_")[-1].split("/")[0]
-        get_all_detection_results(args.txt_path, stage_name)
+        get_all_detection_results(args.txt_path, stage_name, alpha, beta)
     else:
         raise ValueError("Please provide either --weights and --data or --txt-path")

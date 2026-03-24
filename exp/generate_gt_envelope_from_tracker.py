@@ -112,7 +112,7 @@ def build_gt_envelope_points(grouped_gt_root: Path, ssim_map: Dict[str, float]) 
                         "gt_num_matches": int(record.get("gt_num_matches", 0)),
                         "gt_match_coverage": float(record.get("gt_match_coverage", np.nan)),
                         "gt_frame_consistency": float(record.get("gt_frame_consistency", np.nan)),
-                        "gt_mean_match_iou": float(record.get("gt_mean_match_iou", record.get("gt_mean_match_quality", np.nan))),
+                        "gt_mean_match_iou": float(record.get("gt_mean_match_iou", record.get("gt_mean_match_coverage_ratio , np.nan))),
                         "exclude_from_main_eval": bool(record.get("exclude_from_main_eval", False)),
                         "gt_is_empty_empty": bool(record.get("gt_is_empty_empty", False)),
                     }

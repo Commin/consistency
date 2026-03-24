@@ -509,7 +509,7 @@ def generate_gt_consistency_reference_for_prefix(
             "gt_num_t": int(len(gt_t)),
             "gt_num_t1": int(len(gt_t1)),
             "gt_num_matches": int(match_info["matched_count"]),
-            "gt_mean_match_quality": float(match_info["mean_match_iou"]),  # legacy alias kept
+            "gt_mean_match_coverage_ratio": float(match_info["mean_match_iou"]),  # legacy alias kept
             "gt_mean_match_iou": float(match_info["mean_match_iou"]),
             "gt_mean_match_cost": float(match_info["mean_match_cost"]),
             "gt_mean_center_dist": float(match_info["mean_center_dist"]),
@@ -518,7 +518,7 @@ def generate_gt_consistency_reference_for_prefix(
             "gt_match_coverage": float(match_info["match_coverage"]),
             "gt_frame_consistency": float(match_info["gt_frame_consistency"]),
             "gt_match_coverage_main_eval": float(match_info["match_coverage"]),
-"gt_mean_match_iou_main_eval": float(match_info["mean_match_iou"]),
+            "gt_mean_match_iou_main_eval": float(match_info["mean_match_iou"]),
             "gt_is_consistent_binary": int(legacy_binary),
             "gt_is_empty_empty": bool(match_info["empty_empty_transition"]),
             "exclude_from_main_eval": bool(eval_excluded),
@@ -555,7 +555,7 @@ def generate_gt_consistency_reference_for_prefix(
             "gt_num_t": int(len(gt_last)),
             "gt_num_t1": 0,
             "gt_num_matches": 0,
-            "gt_mean_match_quality": 0.0,
+            "gt_mean_match_coverage_ratio": 0.0,
             "gt_mean_match_iou": 0.0,
             "gt_mean_match_cost": 0.0,
             "gt_mean_center_dist": 0.0,

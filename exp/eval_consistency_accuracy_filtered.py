@@ -597,7 +597,7 @@ def join_prefix_prediction_with_gt(pred_df: pd.DataFrame, gt_df: pd.DataFrame, p
             "gt_num_t",
             "gt_num_t1",
             "gt_num_matches",
-            "gt_mean_match_quality",
+            "gt_mean_match_coverage_ratio",
             "gt_frame_idx",
             "gt_next_frame_idx",
         ]
