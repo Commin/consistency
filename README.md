@@ -1,97 +1,108 @@
-# Consistency-aware Performance Monitoring and Model Retraining for Object Detection
+# consistency — label-free, motion-compensated temporal consistency for video object detection
 
-This [repository](https://github.com/Commin/consistency) contains the implementation of **Prediction Consistency**, a label-free metric that measures the temporal stability of detection results across consecutive frames in time-series images (e.g., videos from onboard cameras). 
-While we use YOLOv12 as the base object detection model, the core contribution of this repository focuses on runtime reliability assessment and dynamic data construction.
+This package scores how consistent an object detector's outputs are between consecutive video frames, **without ground-truth labels**. A falling score is a runtime warning that the detector may be degrading, for example under domain drift.
 
-**Please clone YOLOv12 before you use this repository.**
+It implements one fixed configuration, the **locked cell `Gmc-full-1ch-incl`**: camera motion is compensated before scoring, and the result is a single alarm value per frame pair.
 
-## Overview
+## What goes in, what comes out
 
-Adjacent frames captured by onboard cameras often show high visual similarity. A reliable object detection model should produce stable predictions across these frames, including consistent bounding box locations and object class labels. Large variations in predictions across visually similar frames may indicate degraded model reliability or environmental mismatch. 
+**Input:** detector predictions for two consecutive frames, each box as `[cls, cx, cy, w, h]` or `[cls, cx, cy, w, h, conf]` in normalised coordinates (YOLO `.txt` format; a missing `conf` counts as 1.0). No images, no optical flow, no labels.
 
-Instead of relying on ground-truth annotations to compute detection accuracy, the core idea of the proposed approach is to leverage **Prediction Consistency** as a label-free indicator to assess model reliability during runtime. 
+**Output** per frame pair (`MonitorResult`):
 
-Our method:
-1. Evaluates bounding box overlap (IoU) and class agreement between adjacent frames.
-2. Adapts the stability threshold dynamically using image similarity (SSIM).
-3. Enables lightweight runtime monitoring directly on edge devices to detect abnormal drift.
+| field | meaning |
+|---|---|
+| `status` | `MATCHED`, `NO_MATCH`, `ONE_SIDED` or `EMPTY_PAIR` |
+| `N_t`, `N_t1` | number of boxes in frame *t* and *t+1* **after** per-class NMS |
+| `K` | number of matched pairs |
+| `G` | mean IoU of the matched pairs, before motion compensation (`NaN` unless `MATCHED`) |
+| `G_mc` | the same pairs' mean IoU after shifting frame *t* by the estimated global shift (`NaN` unless `MATCHED`) |
+| `dx`, `dy` | estimated global shift, in the units of the input coordinates (`0.0, 0.0` if there are no matches) |
+| `motion_magnitude` | `hypot(dx, dy)` |
+| `consistency` | `G_mc * K / max(N_t, N_t1, 1)` when `MATCHED`; `0.0` for `NO_MATCH` and `ONE_SIDED`; `NaN` for `EMPTY_PAIR` |
+| `alarm` | `1 - consistency` when `MATCHED`; `1.0` for `NO_MATCH` and `ONE_SIDED`; `NaN` for `EMPTY_PAIR` |
 
-## Project Structure and Implementation
+`consistency` and `alarm` lie in [0, 1] up to floating-point rounding.
 
-The repository consists of several core components that implement our proposed methodologies:
+## How it works
 
-### Core Algorithm
-- **`consistency.py`**: The core logic for calculating Prediction Consistency. Computes the Intersection over Union (IoU) of bounding boxes and class alignments across consecutive frames using an optimal greedy matching approach to handle varying numbers of object detections.
-- **`calibrate.py`**: Implements the Adaptive Consistency Envelope calibration. It uses Quantile Regression to model the relationship between visual similarity (SSIM) and expected spatial overlap (IoU). It provides the `detect_abnormal_drift` function for real-time model monitoring against environmental mismatches.
+1. **Class-wise non-maximum suppression** on each frame (IoU threshold 0.5, no confidence cut-off). `N_t` and `N_t1` are the counts that remain.
+2. **Matching** between the two frames with the Hungarian algorithm on cost `1 - IoU`. Boxes of different classes cannot match, and pairs with IoU below 0.05 are rejected. (A spatial gate on centre distance also exists, but with normalised coordinates it never binds, so admission is decided by class and the IoU floor alone.)
+3. **Global shift:** the median displacement of the matched box centres, taken separately for x and y: `(dx, dy)`.
+4. **Compensation:** frame *t* boxes are shifted by `(dx, dy)` (translation only), and the IoU of the **same** matched pairs is recomputed. The mean of these IoUs is `G_mc`. No second matching is done.
+5. **Score:** `consistency = G_mc * K / max(N_t, N_t1, 1)`, and `alarm = 1 - consistency`.
 
-### Incremental Learning & Dataset Construction
-- **`construct.py`**: Handles dynamic dataset construction for model retraining or incremental learning. It leverages the consistency scores (and other modes like confidence or random sampling) to intelligently select frames (e.g., picking 10% of frames with the lowest consistency for annotation and retraining).
-- **`increment.py`**: The main incremental pipeline that orchestrates the end-to-end multi-stage process (e.g., sequentially from `clear_00` to `clear_50`). It seamlessly integrates YOLO training, evaluation, validation, and dynamic dataset construction based on the selected target metric.
+Status rules (counts are after NMS):
+- `EMPTY_PAIR`: both frames have no boxes. `consistency` and `alarm` are `NaN`.
+- `ONE_SIDED`: exactly one frame has no boxes. `alarm = 1.0`.
+- `NO_MATCH`: both frames have boxes but no pair is admitted. `alarm = 1.0`.
+- `MATCHED`: at least one pair is admitted.
 
-### Model Training & Evaluation Handlers (YOLOv12 Base)
-- **`train.py`**: YOLOv12 training wrapper script with per-epoch validations.
-- **`val_test.py`**: Batch validation script to evaluate models across different incremental stages.
-- **`test_yolo.py`**: Standard YOLOv12 inference script on video input.
+Configuration name `Gmc-full-1ch-incl`:
+- `Gmc`: localisation `G` is computed after motion compensation.
+- `full`: every unmatched box counts in full, through the denominator `max(N_t, N_t1, 1)`.
+- `1ch`: one composite alarm, rather than separate disappearance and appearance channels.
+- `incl`: `ONE_SIDED` and `NO_MATCH` transitions are judged (alarm 1.0) rather than skipped. `EMPTY_PAIR` remains undefined.
 
-## Usage
-
-### 1. SSIM Calculation
+## Quick start
 
 ```bash
-python ssim.py --gt-dir path/to/ground_truth --output-dir path/to/output --csv-name ssim_results.csv
+pip install -r requirements.txt
+python examples/run_on_yolo_txt.py --pred-dir path/to/yolo_txt_predictions
 ```
 
-### 2. Calibrate Consistency Envelope
-Calibrate the threshold boundary based on a historical sequence and evaluate for abnormal drifts:
+The script prints one CSV row per pair of consecutive frames (`--out FILE` writes to a file instead). Files are ordered numerically by frame index, and pairs are formed only within one sequence; see `consistency/io.py` for the accepted file-name patterns.
+
+```python
+from consistency.monitor import compute_locked_monitor
+result = compute_locked_monitor(preds_t, preds_t1)
+print(result.consistency, result.alarm)
+```
+
+## Label-free: what that covers
+
+The **score** never reads labels. Turning the score into an alarm needs a **threshold**, and how you choose it decides whether the whole monitor is label-free. This package does not include any thresholding.
+- **Label-free:** set the threshold from the score's distribution on data you consider healthy (for example, a low quantile of `consistency`).
+- **Supervised:** fit the threshold on labelled degradations, for example to a target false-positive rate. The score is still label-free; the threshold is not.
+
+## Cost
+
+| platform | median per frame pair | what was timed |
+|---|---|---|
+| Jetson TX2 (Python 3.6.9, NumPy 1.19.5, SciPy 1.5.4, one BLAS thread) | 1.88 ms | the complete `compute_locked_monitor`, on 6,287 real transitions (median about 7 boxes per frame) |
+| Apple-silicon laptop (macOS, Python 3.13) | 48 µs | the matching stage only (`compute_frame_pair_signal`, with NMS and Hungarian matching), on real transitions; the full monitor was not timed on this machine |
+
+Timings exclude detector inference and file parsing. The per-pair input is a few kilobytes of Python lists (median 4.0 KB on the real transitions, 12 KB at 25 boxes per frame). The whole benchmark process on the TX2 peaked at about 100 MB resident memory, most of it the Python runtime. No image processing is involved. These are measurements from one run on each platform; timings on your hardware will differ.
+
+## Limitations
+
+- **Translation only:** rotation and zoom are not compensated.
+- **Median shift:** the estimate degrades if more than half of the matched objects move differently from the camera.
+- **Matching is done before compensation and not redone:** under a large camera shift, pairs whose IoU falls below 0.05 are never matched and cannot be recovered by the compensation.
+- **Whole-frame gaps:** if a frame has no boxes at all (or no pair is admitted), the pair is `ONE_SIDED` or `NO_MATCH` and the alarm is 1.0, even if the detector is correct. Individual objects entering or leaving the frame lower `K / max(N_t, N_t1)` but the pair stays `MATCHED`.
+- **Normalised coordinates:** the fixed spatial-gate constant assumes coordinates in [0, 1]. With pixel coordinates the gate would become active and change the result.
+
+## Tests
+
 ```bash
-python calibrate_video.py --lbl-dir path/to/labels --img-dir path/to/images --quantile 0.95 --plot
-```
-This script generates an optimal boundary envelope `calibration_plot.png` and runs drift detection over the sequence, outputting instances of detected instability.
-
-
-### 3. Incremental Learning Pipeline
-To run the full incremental training and dataset construction based heavily on Prediction Consistency, configure the inside of the script (e.g., `LEARNING_MODE = "consistency"`) and run:
-```bash
-python increment.py --mode consistency --train --increment --stage 0
+pip install pytest
+pytest tests/
 ```
 
-### 4. Evaluation Experiment
+- `test_reference.py` reproduces the stored reference signals of 100 transitions exactly (maximum absolute error 0.0).
+- `test_identity.py` checks the identity anchor: with `G` in place of `G_mc` (and every unmatched box counted in full) the composite `G * K / max(N_t, N_t1, 1)` equals the uncompensated consistency `R = G * m` to machine precision. It also checks the status rules and that a pure global shift is compensated.
 
-To use the `exp` folder python files for the evaluation experiment:
+## History
 
-**1. Generate aggregate agreement score, match coverage ratio:**
-Outputs: `all_val_data_all/labels/`, `all_consistency_eval/frame_consistency_.csv`, `all_consistency_eval/object_consistency_.json`
-```bash
-python val_consistency.py --data dataset_path/data.yaml --weights weights_path/best.pt --project project_path
-```
+- **v3 (current):** motion-compensated locked monitor `Gmc-full-1ch-incl`. No SSIM, no image input.
+- **v1:** SSIM-conditioned consistency envelope. Superseded; available at tag [`v1-ssim`](https://github.com/Commin/consistency/tree/v1-ssim).
 
-**2. Generate ground-truth multi-object tracking (`gt_track`):**
-```bash
-python generate_gt_consistency_reference_tracker.py --gt-dir dataset_path/labels/ --save-path grouped_gt_tracker
-```
+See [CHANGELOG.md](CHANGELOG.md).
 
-**3. Generate oracle consistency boundary, index summary, and calibration metrics:**
-```bash
-python generate_gt_envelope_from_tracker.py --grouped-gt-root grouped_gt_tracker \
---ssim-path ssim_results.csv \
---save-path gt_envelope_out_with_unmatched \
-```
+## Citation
 
-**4. Generate and evaluate calibrated consistency boundary based on oracle boundary:**
-Outputs: `best_consistency_boundary.png`, `index_summary.json`, `per_prefix_calibration_metrics.csv`
-```bash
-python eval_calibrate_robust.py --frame-path object_consistency_all_data.json --ssim-path all_ssim.csv --save-path save_path --plot
-```
+_To be added._
 
-**5. Generate global metrics, per prefix metrics, and method configs:**
-Outputs: `global_metrics.csv`, `per_prefix_metrics.csv`, `method_configs.json`
-```bash
-python eval_consistency_accuracy_filtered.py --frame-path object_consistency_all_data.json --ssim-path all_ssim.csv --grouped-gt-root grouped_gt_tracker/ --calibration-root grouped_robust_calibrate_results/ --save-path save_path
-```
+## License
 
-## Dataset
-
-The experiments in our paper are conducted on the Singapore Maritime Dataset (SMD), a large-scale maritime image dataset collected from onboard cameras. The dataset contains diverse maritime scenarios, including various weather conditions, lighting variations, and object types (e.g., vessels, buoys). The SMD provides a rich testbed for evaluating the robustness and reliability of object detection models in real-world maritime environments.
-
-[SMD official](https://sites.google.com/site/dilipprasad/home/singapore-maritime-dataset)
-[SMD image dataset](https://universe.roboflow.com/maritime-cumkb/singapore-maritime)
+_To be chosen._
